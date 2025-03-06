@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>业务逻辑库 - 中国城市列表</title>
+  <link rel="stylesheet" href="style.css">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <header>
+    <h1>业务逻辑库</h1>
+    <nav>
+      <ul>
+        <li><a href="index.html">返回主页</a></li>
+      </ul>
+    </nav>
+  </header>
+  <main>
+    <section id="城市列表">
+      <h2>中国城市列表</h2>
+      <div class="action-bar">
+          <button class="btn btn-primary" onclick="createCity()">新增城市</button>
+          <button class="btn btn-danger" onclick="openDeleteModal()">删除城市</button>
+      </div>
+      <ul id="dynamicCityList">
+        <li>正在加载城市数据...</li>
+      </ul>
+    </section>
+  </main>
+  <section id="searchSection">
+    <h2>文件搜索</h2>
+    <div class="search-box">
+      <input type="text" id="searchInput" placeholder="输入文件名关键字">
+      <button onclick="handleSearch()">
+        <i class="fas fa-search"></i>
+      </button>
+    </div>
+    <div id="searchResults" class="result-container"></div>
+  </section>
+
+  <!-- 删除城市模态框 -->
+  <div id="deleteCityModal" class="modal">
+    <div class="modal-content">
+      <span class="close" onclick="closeDeleteModal()">&times;</span>
+      <h3>选择要删除的城市</h3>
+      <select id="deleteCitySelect"></select>
+      <div class="modal-actions" style="margin-top: 20px;">
+        <button class="btn btn-danger" onclick="confirmDeleteCity()">删除</button>
+        <button class="btn" onclick="closeDeleteModal()">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // 加载城市列表
+    async function loadCities() {
+      try {
+        const res = await fetch('/getCities');
+        const cities = await res.json();
+        const list = document.getElementById('dynamicCityList');
+        if (cities.error) {
+          list.innerHTML = `<li>${cities.error}</li>`;
+          return;
+        }
+        list.innerHTML = cities.map(city => 
+            `<li>
+              <a href="业务逻辑库城市.html?city=${encodeURIComponent(city)}&type=business">${city}</a>
+            </li>`
+        ).join('');
+      } catch (error) {
+        console.error(error);
+        document.getElementById('dynamicCityList').innerHTML = '<li>加载失败</li>';
+      }
+    }
+
+    window.addEventListener('DOMContentLoaded', loadCities);
+
+    // 新增城市：弹出输入框输入城市名称，然后调用后端 API 创建目录结构
+    async function createCity() {
+      const city = prompt("请输入新城市名称：");
+      if (!city) return;
+      try {
+        const res = await fetch('/api/city/create', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({city: city, type: 'business'})
+        });
+        const result = await res.json();
+        if (res.ok) {
+          alert(result.message);
+          loadCities(); // 刷新城市列表
+        } else {
+          alert(result.error);
+        }
+      } catch (error) {
+        console.error(error);
+        alert("新增城市失败");
+      }
+    }
+
+    // 删除城市功能优化：使用模态框选择现有城市进行删除
+    function openDeleteModal() {
+      loadDeleteCitySelect();
+      document.getElementById('deleteCityModal').style.display = 'block';
+    }
+
+    async function loadDeleteCitySelect() {
+      try {
+        const res = await fetch('/getCities');
+        const cities = await res.json();
+        const select = document.getElementById('deleteCitySelect');
+        if (cities.error) {
+          select.innerHTML = `<option value="">加载错误</option>`;
+          return;
+        }
+        if(cities.length === 0){
+          select.innerHTML = `<option value="">没有城市数据</option>`;
+        } else {
+          select.innerHTML = `<option value="">请选择要删除的城市</option>`;
+          cities.forEach(city => {
+            select.innerHTML += `<option value="${city}">${city}</option>`;
+          });
+        }
+      } catch (error) {
+        console.error(error);
+        document.getElementById('deleteCitySelect').innerHTML = `<option value="">加载失败</option>`;
+      }
+    }
+
+    function closeDeleteModal() {
+      document.getElementById('deleteCityModal').style.display = 'none';
+    }
+
+    async function confirmDeleteCity() {
+      const select = document.getElementById('deleteCitySelect');
+      const city = select.value;
+      if (!city) {
+        alert("请选择要删除的城市");
+        return;
+      }
+      if (!confirm(`确定要删除城市【${city}】及其所有数据吗？`)) return;
+      try {
+        const res = await fetch('/api/city/delete', {
+          method: 'DELETE',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({city: city, type: 'business'})
+        });
+        const result = await res.json();
+        if (res.ok) {
+          alert(result.message);
+          closeDeleteModal();
+          loadCities(); // 刷新城市列表
+        } else {
+          alert(result.error);
+        }
+      } catch (error) {
+        console.error(error);
+        alert("删除城市失败");
+      }
+    }
+
+    // 搜索功能：支持跨所有城市的模糊查询
+    async function handleSearch() {
+      try {
+        const query = document.getElementById('searchInput').value.trim();
+        if (!query) {
+          alert('请输入搜索内容');
+          return;
+        }
+        const searchBtn = document.querySelector('#searchSection button');
+        searchBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 搜索中...';
+        searchBtn.disabled = true;
+
+        // 不传 city 参数，搜索所有城市
+        let url = `/searchFiles?query=${encodeURIComponent(query)}&type=business`;
+        
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`搜索失败: ${response.status} ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        if (data.error) throw new Error(data.error);
+        
+        const searchResults = document.getElementById('searchResults');
+        if (data.results.length === 0) {
+          searchResults.innerHTML = '<p class="no-result">未找到匹配的文件</p>';
+        } else {
+          searchResults.innerHTML = data.results.map(result => 
+            `<div class="search-item">
+              <div class="info">
+                <div class="name">${result.name}</div>
+                <div class="path">城市: ${result.city}，路径: ${result.path}</div>
+              </div>
+              <a class="download-btn" href="/download?city=${encodeURIComponent(result.city)}&type=business&file=${encodeURIComponent(result.path)}" download>下载</a>
+            </div>`
+          ).join('');
+        }
+        searchBtn.innerHTML = '<i class="fas fa-search"></i>';
+        searchBtn.disabled = false;
+      } catch (error) {
+        console.error('搜索失败:', error);
+        alert('搜索失败，请稍后重试');
+      }
+    }
+  </script>
+</body>
+</html>

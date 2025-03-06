@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>城市详情 - 业务逻辑库</title>
+  <link rel="stylesheet" href="style.css">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <!-- 如果需要预览 docx，则引入 Mammoth -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.4.15/mammoth.browser.min.js"></script>
+</head>
+<body>
+  <header>
+    <h3 id="cityTitle"></h3>
+    <nav>
+      <ul>
+        <li><a href="index.html">返回主页</a></li>
+        <li><a href="业务逻辑库.html">返回业务逻辑库</a></li>
+      </ul>
+    </nav>
+  </header>
+  <main>
+    <section id="文件列表">
+      <div class="path-navigation" id="pathNavigation"></div>
+      <div class="actions">
+        <button class="btn btn-primary" onclick="deleteSelectedFiles()">删除选中</button>
+        <button class="btn btn-primary" onclick="moveSelectedFiles()">移动选中</button>
+      </div>
+      <table class="file-table">
+        <thead>
+          <tr>
+            <th><input type="checkbox" id="selectAll" onclick="toggleSelectAll()"></th>
+            <th>名称</th>
+            <th>类型</th>
+            <th>操作</th>
+          </tr>
+        </thead>
+        <tbody id="directoryContainer"></tbody>
+      </table>
+    </section>
+  </main>
+  <!-- 文件预览模态框 -->
+  <div id="filePreviewModal" class="modal" style="display:none;">
+    <div class="modal-content">
+      <span class="close" onclick="closeModal()">&times;</span>
+      <div id="filePreviewContent"></div>
+    </div>
+  </div>
+  <!-- 移动文件模态框 -->
+  <div id="moveFileModal" class="modal" style="display:none;">
+    <div class="modal-content">
+      <span class="close" onclick="closeMoveModal()">&times;</span>
+      <div id="moveFileContent"></div>
+    </div>
+  </div>
+
+  <script>
+    // ------------------------------------
+    // 主页面功能：加载目录、预览、删除
+    // ------------------------------------
+
+    // 获取 URL 中的城市参数
+    function getCity() {
+      const urlParams = new URLSearchParams(location.search);
+      const city = urlParams.get('city');
+      if (!city) {
+        alert('缺少城市参数');
+      }
+      return city;
+    }
+
+    function updateHistoryState(path) {
+      const city = getCity();
+      history.pushState({ path }, '', `?city=${encodeURIComponent(city)}&path=${encodeURIComponent(path)}&type=business`);
+    }
+
+    async function loadDirectory(path = '') {
+      try {
+        const city = getCity();
+        const response = await fetch(`/getSubDirectories?city=${encodeURIComponent(city)}&type=business&path=${encodeURIComponent(path)}`);
+        if (!response.ok) {
+          throw new Error(`HTTP错误! 状态码: ${response.status}`);
+        }
+        const data = await response.json();
+        if (data.error) {
+          throw new Error(data.error);
+        }
+        const container = document.getElementById('directoryContainer');
+        container.innerHTML = data.structure.map(item => renderItem(item)).join('');
+        document.getElementById('pathNavigation').innerHTML = generatePathLinks(path);
+      } catch (error) {
+        console.error('目录加载失败:', error);
+        alert(`加载失败: ${error.message}`);
+      }
+    }
+
+    function renderItem(item) {
+      if (item.type === 'directory') {
+        return `
+          <tr>
+            <td><input type="checkbox" class="select-file" data-path="${item.path}"></td>
+            <td><i class="fas fa-folder"></i> ${item.name}</td>
+            <td>目录</td>
+            <td>
+              <button class="btn btn-primary" onclick="loadDirectory('${item.path}')">打开</button>
+            </td>
+          </tr>
+        `;
+      } else {
+        return `
+          <tr>
+            <td><input type="checkbox" class="select-file" data-path="${item.path}"></td>
+            <td><i class="fas fa-file"></i> ${item.name}</td>
+            <td>文件</td>
+            <td>
+              <button class="btn btn-primary" onclick="previewFile('${item.path}', '${item.name}')">预览</button>
+            </td>
+          </tr>
+        `;
+      }
+    }
+
+    function generatePathLinks(currentPath) {
+      const parts = currentPath.split('/').filter(p => p);
+      let html = '<a href="#" onclick="loadDirectory(\'\')">根目录</a>';
+      let accumulatedPath = '';
+      parts.forEach((part) => {
+        accumulatedPath += `${part}/`;
+        html += ` / <a href="#" onclick="loadDirectory('${accumulatedPath.slice(0, -1)}')">${part}</a>`;
+      });
+      return html;
+    }
+
+    function toggleSelectAll() {
+      const selectAllCheckbox = document.getElementById('selectAll');
+      const checkboxes = document.querySelectorAll('.select-file');
+      checkboxes.forEach(checkbox => {
+        checkbox.checked = selectAllCheckbox.checked;
+      });
+    }
+
+    function previewFile(filePath, fileName) {
+      const city = getCity();
+      const fileExtension = fileName.split('.').pop().toLowerCase();
+      const previewContent = document.getElementById('filePreviewContent');
+      previewContent.innerHTML = '';
+
+      if (['pdf'].includes(fileExtension)) {
+        previewContent.innerHTML = `
+          <embed src="${window.location.origin}/preview?city=${encodeURIComponent(city)}&type=business&file=${encodeURIComponent(filePath)}"
+                 type="application/pdf" width="100%" height="600px">
+        `;
+      } else if (fileExtension === 'docx') {
+        fetch(`${window.location.origin}/preview?city=${encodeURIComponent(city)}&type=business&file=${encodeURIComponent(filePath)}`)
+          .then(response => response.arrayBuffer())
+          .then(buffer => {
+            mammoth.convertToHtml({ arrayBuffer: buffer })
+              .then(result => {
+                previewContent.innerHTML = result.value;
+              })
+              .catch(err => {
+                console.error('Mammoth 转换错误:', err);
+                previewContent.innerHTML = '<p>文档预览失败</p>';
+              });
+          })
+          .catch(err => {
+            console.error('文件加载错误:', err);
+            previewContent.innerHTML = '<p>文件加载失败</p>';
+          });
+      } else if (fileExtension === 'doc') {
+        previewContent.innerHTML = `
+          <p>当前不支持在线预览 .doc 格式文件，请点击下方链接下载后使用本地应用查看。</p>
+          <a href="${window.location.origin}/download?city=${encodeURIComponent(city)}&type=business&file=${encodeURIComponent(filePath)}" download>
+            点击下载
+          </a>
+        `;
+      } else if (['xls', 'xlsx'].includes(fileExtension)) {
+        previewContent.innerHTML = `
+          <iframe src="https://view.officeapps.live.com/op/embed.aspx?src=${
+            encodeURIComponent(window.location.origin + '/preview?city=' + city + '&type=business&file=' + filePath)
+          }" frameborder="0" style="width: 100%; height: 600px;"></iframe>
+        `;
+      } else if (['mp4', 'webm', 'ogg'].includes(fileExtension)) {
+        previewContent.innerHTML = `
+          <video controls style="width: 100%; height: 600px;">
+            <source src="${window.location.origin}/preview?city=${encodeURIComponent(city)}&type=business&file=${encodeURIComponent(filePath)}"
+                    type="video/${fileExtension}">
+          </video>
+        `;
+      } else {
+        previewContent.innerHTML = '<p>不支持的文件格式</p>';
+      }
+      document.getElementById('filePreviewModal').style.display = 'block';
+    }
+
+    function closeModal() {
+      const modal = document.getElementById('filePreviewModal');
+      const previewContent = document.getElementById('filePreviewContent');
+      const video = previewContent.querySelector('video');
+      if (video) {
+        video.pause();
+      }
+      previewContent.innerHTML = '';
+      modal.style.display = 'none';
+    }
+
+    async function deleteSelectedFiles() {
+      const city = getCity();
+      const selected = document.querySelectorAll('.select-file:checked');
+      if (selected.length === 0) {
+        alert('请选择要删除的文件');
+        return;
+      }
+      if (!confirm('确定要删除选中的文件吗？')) return;
+      try {
+        for (const checkbox of selected) {
+          const filePath = checkbox.dataset.path;
+          const response = await fetch(`/deleteFile?city=${encodeURIComponent(city)}&type=business&file=${encodeURIComponent(filePath)}`, {
+            method: 'DELETE'
+          });
+          if (!response.ok) throw new Error('删除失败');
+        }
+        alert('文件删除成功');
+        const currentPath = new URLSearchParams(location.search).get('path') || '';
+        loadDirectory(currentPath);
+      } catch (error) {
+        console.error('删除文件失败:', error);
+        alert('文件删除失败');
+      }
+    }
+
+    // ------------------------------------
+    // 移动文件：选择目标城市 -> 目录树 -> 选中目标目录
+    // ------------------------------------
+
+    async function moveSelectedFiles() {
+      const moveFileContent = document.getElementById('moveFileContent');
+      moveFileContent.innerHTML = `
+        <h3>选择目标目录</h3>
+        <select id="targetDirectorySelect" onchange="loadTargetSubDirectories()"></select>
+        <div id="targetDirectoryTree"></div>
+        <button class="btn btn-primary" onclick="confirmMoveFiles()">确认移动</button>
+      `;
+      try {
+        const response = await fetch('/getCities');
+        const cities = await response.json();
+        const targetDirectorySelect = document.getElementById('targetDirectorySelect');
+        targetDirectorySelect.innerHTML = '<option value="">请选择目标城市</option>';
+        cities.forEach(ct => {
+          targetDirectorySelect.innerHTML += `<option value="${ct}">${ct}</option>`;
+        });
+        document.getElementById('moveFileModal').style.display = 'block';
+      } catch (error) {
+        console.error('加载城市失败:', error);
+        alert('加载城市失败');
+      }
+    }
+
+    async function loadTargetSubDirectories() {
+      const targetCity = document.getElementById('targetDirectorySelect').value;
+      if (!targetCity) return;
+      try {
+        const response = await fetch(`/getSubDirectories?city=${encodeURIComponent(targetCity)}&type=business`);
+        const data = await response.json();
+        const container = document.getElementById('targetDirectoryTree');
+        container.innerHTML = '';
+        renderTargetDirectory(data.structure, container, 0);
+      } catch (error) {
+        console.error('加载目标子目录失败:', error);
+        alert('加载目标子目录失败');
+      }
+    }
+
+    // 递归渲染可折叠的目录树（仅目录）
+    function renderTargetDirectory(structure, container, level = 0) {
+      structure.forEach(item => {
+        if (item.type === 'directory') {
+          const div = document.createElement('div');
+          div.className = 'target-directory-item';
+          div.style.paddingLeft = `${level * 20}px`;
+
+          // 1) 小图标区域：点击只负责折叠/展开
+          const iconWrap = document.createElement('span');
+          iconWrap.className = 'folder-icon';
+          iconWrap.innerHTML = `<i class="fas fa-folder"></i>`;
+          iconWrap.addEventListener('click', (e) => {
+            e.stopPropagation();
+            toggleTargetDirectory(div, iconWrap.querySelector('i'));
+          });
+          div.appendChild(iconWrap);
+
+          // 2) 目录名区域：点击选中该目录
+          const nameSpan = document.createElement('span');
+          nameSpan.className = 'folder-name';
+          nameSpan.textContent = ' ' + item.name; // 加个空格便于美观
+          // 点击该区域则选中该目录
+          nameSpan.addEventListener('click', (e) => {
+            e.stopPropagation();
+            selectTargetDirectory(div);
+          });
+          div.appendChild(nameSpan);
+
+          // 3) 子目录容器
+          const childrenContainer = document.createElement('div');
+          childrenContainer.className = 'target-directory-children';
+          childrenContainer.style.display = 'none';
+          div.appendChild(childrenContainer);
+
+          // 递归渲染子目录
+          if (item.children && item.children.length > 0) {
+            renderTargetDirectory(item.children, childrenContainer, level + 1);
+          }
+
+          // 存储路径
+          div.dataset.path = item.path;
+          container.appendChild(div);
+        }
+      });
+    }
+
+    // 折叠/展开子目录
+    function toggleTargetDirectory(directoryDiv, icon) {
+      const childrenContainer = directoryDiv.querySelector('.target-directory-children');
+      if (!childrenContainer) return;
+      if (childrenContainer.style.display === 'none' || !childrenContainer.style.display) {
+        childrenContainer.style.display = 'block';
+        icon.classList.replace('fa-folder', 'fa-folder-open');
+      } else {
+        childrenContainer.style.display = 'none';
+        icon.classList.replace('fa-folder-open', 'fa-folder');
+      }
+    }
+
+    // 选中目标目录
+    function selectTargetDirectory(directoryDiv) {
+      // 清除之前的选中
+      document.querySelectorAll('.target-directory-item').forEach(el => el.classList.remove('selected'));
+      // 给当前点击的目录添加选中样式
+      directoryDiv.classList.add('selected');
+      console.log('选中的目标目录：', directoryDiv.dataset.path);
+    }
+
+    // 确认移动文件
+    async function confirmMoveFiles() {
+      const sourceCity = getCity();
+      const targetCity = document.getElementById('targetDirectorySelect').value;
+      if (!targetCity) {
+        alert('请选择目标城市');
+        return;
+      }
+      const selectedDir = document.querySelector('.target-directory-item.selected');
+      if (!selectedDir) {
+        alert('请选择目标目录');
+        return;
+      }
+      const targetPath = selectedDir.dataset.path;
+      try {
+        const selected = document.querySelectorAll('.select-file:checked');
+        if (selected.length === 0) {
+          alert('请选择要移动的文件');
+          return;
+        }
+        for (const checkbox of selected) {
+          const filePath = checkbox.dataset.path;
+          const newPath = `${targetPath}/${filePath.split('/').pop()}`;
+          const response = await fetch(`/moveFile`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              sourceCity: sourceCity, 
+              targetCity: targetCity, 
+              type: 'business', 
+              oldPath: filePath, 
+              newPath: newPath 
+            })
+          });
+          if (!response.ok) throw new Error('移动失败');
+        }
+        alert('文件移动成功');
+        closeMoveModal();
+        const currentPath = new URLSearchParams(location.search).get('path') || '';
+        loadDirectory(currentPath);
+      } catch (error) {
+        console.error('移动文件失败:', error);
+        alert('文件移动失败');
+      }
+    }
+
+    function closeMoveModal() {
+      document.getElementById('moveFileModal').style.display = 'none';
+    }
+
+    // 页面初始化
+    window.addEventListener('DOMContentLoaded', () => {
+      const urlParams = new URLSearchParams(location.search);
+      const city = urlParams.get('city');
+      if (!city) {
+        alert('缺少城市参数');
+        return;
+      }
+      document.getElementById('cityTitle').textContent = city;
+      loadDirectory(urlParams.get('path') || '');
+    });
+
+    // 监听浏览器回退/前进
+    window.addEventListener('popstate', (event) => {
+      if (event.state && event.state.path !== undefined) {
+        loadDirectory(event.state.path);
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>城市数据知识库</title>
+  <link rel="stylesheet" href="style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Poppins:wght@300;500;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <header>
+    <div class="logo-container">
+      <img src="./images/全力科技LOGO-图形.png" alt="知识库Logo" class="logo">
+    </div>
+    <!-- <img src="./images/全力科技LOGO-图形+蓝色中文.png" alt="知识库Logo" class="logo" style="position: absolute; top: 0; left: 0;"> -->
+    <h1>城市数据知识库</h1>
+    <nav>
+      <ul>
+        <li><a href="业务逻辑库.html">业务数据</a></li>
+        <li><a href="常用问题库.html">问题库</a></li>
+        <li><a href="产品逻辑库.html">产品数据</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main class="management-panel">
+    <section class="city-selector">
+      <select id="citySelect" onchange="loadSubDirectories()"></select>
+      <select id="subDirectorySelect" style="display: none;"></select>
+      <input type="file" id="fileInput" hidden>
+      <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">选择文件</button>
+      <span id="fileName" style="margin-left: 10px;"></span>
+      <button class="btn btn-primary" onclick="uploadFile()">上传文件</button>
+      <!-- <button class="btn" onclick="exportFiles()">导出文件</button> -->
+    </section>
+  </main>
+
+  <script>
+    // 动态交互效果
+    document.addEventListener('DOMContentLoaded', () => {
+      // 导航悬停效果
+      document.querySelectorAll('nav a').forEach(link => {
+        link.addEventListener('mouseenter', () => {
+          link.style.transform = 'translateY(-3px) scale(1.05)';
+        });
+        link.addEventListener('mouseleave', () => {
+          link.style.transform = 'none';
+        });
+      });
+
+      // 光标轨迹特效
+      document.addEventListener('mousemove', (e) => {
+        const x = e.clientX / window.innerWidth;
+        const y = e.clientY / window.innerHeight;
+        document.documentElement.style.setProperty(
+          '--gradient-pos',
+          `${x * 100}% ${y * 100}%`
+        );
+      });
+    });
+
+    // 加载子目录
+    async function loadSubDirectories() {
+      const city = document.getElementById('citySelect').value;
+      if (!city) return;
+
+      const response = await fetch(`/getSubDirectories?city=${city}&type=business`);
+      const data = await response.json();
+
+      const subDirectorySelect = document.getElementById('subDirectorySelect');
+      subDirectorySelect.style.display = 'block';
+      subDirectorySelect.innerHTML = '<option value="">请选择子目录</option>';
+      data.structure.forEach(item => {
+        if (item.type === 'directory') {
+          subDirectorySelect.innerHTML += `<option value="${item.path}">${item.name}</option>`;
+        }
+      });
+    }
+
+    // 显示选择的文件名
+    document.getElementById('fileInput').addEventListener('change', function() {
+      const fileName = this.files[0] ? this.files[0].name : '';
+      document.getElementById('fileName').textContent = fileName;
+    });
+
+    // 文件上传功能
+    async function uploadFile() {
+      const city = document.getElementById('citySelect').value;
+      const subDirectory = document.getElementById('subDirectorySelect').value;
+      if (!city) return alert('请先选择城市');
+      if (!subDirectory) return alert('请先选择子目录');
+
+      const file = document.getElementById('fileInput').files[0];
+      if (!file) return alert('请选择要上传的文件');
+
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('city', city);
+        formData.append('subDirectory', subDirectory);
+
+        const response = await fetch('/uploadFile', {
+          method: 'POST',
+          body: formData
+        });
+
+        if (!response.ok) throw new Error('上传失败');
+        const data = await response.json();
+        alert(data.message || '文件上传成功');
+      } catch (error) {
+        console.error('上传文件失败:', error);
+        alert('文件上传失败');
+      }
+    }
+  </script>
+  <script src="app.js"></script>
+</body>
+</html>
