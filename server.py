@@ -5,8 +5,10 @@ import faq_manager
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 
+# 获取项目根目录
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-CITY_FOLDER = r'C:\Users\luoch\Desktop\knowledge-base\knowledge-base\css\city'
+# 使用相对路径，城市目录放在项目根目录下的 "city" 文件夹中
+CITY_FOLDER = os.path.join(BASE_DIR, "city")
 os.makedirs(CITY_FOLDER, exist_ok=True)
 
 def get_base_folder(base_type):
@@ -17,9 +19,10 @@ def get_expected_root(city, base_type):
     base_folder = get_base_folder(base_type)
     return os.path.abspath(os.path.join(CITY_FOLDER, safe_city, base_folder))
 
+# 修改根路由，返回首页 index.html
 @app.route('/')
 def index():
-    return send_file('业务逻辑库城市.html')
+    return send_file('index.html')
 
 @app.route('/getCities')
 def get_cities():
@@ -178,7 +181,7 @@ def delete_file():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ---------------- 新增接口 ----------------
+# ---------------- 新增城市管理接口 ----------------
 
 @app.route('/api/city/create', methods=['POST'])
 def create_city():
@@ -188,7 +191,7 @@ def create_city():
     if not city:
         return jsonify({"error": "城市名称不能为空"}), 400
     safe_city = city.strip().replace('..', '')
-    base_folder = get_base_folder(base_type)  # 对于业务逻辑库，返回 "业务逻辑库"
+    base_folder = get_base_folder(base_type)
     city_path = os.path.join(CITY_FOLDER, safe_city)
     business_path = os.path.join(city_path, base_folder)
     subdirs = ["合同库", "文档库", "视频库"]

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>业务逻辑库 - 中国城市列表</title>
-  <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="/css_1/style.css">
   <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
 </head>
@@ -18,7 +18,7 @@
   </header>
   <main>
     <section id="城市列表">
-      <h2>中国城市列表</h2>
+      <h2>城市列表</h2>
       <div class="action-bar">
           <button class="btn btn-primary" onclick="createCity()">新增城市</button>
           <button class="btn btn-danger" onclick="openDeleteModal()">删除城市</button>
@@ -65,7 +65,7 @@
         }
         list.innerHTML = cities.map(city => 
             `<li>
-              <a href="业务逻辑库城市.html?city=${encodeURIComponent(city)}&type=business">${city}</a>
+              <a href="Business_Logic_city.html?city=${encodeURIComponent(city)}&type=business">${city}</a>
             </li>`
         ).join('');
       } catch (error) {
