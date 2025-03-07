@@ -225,7 +225,7 @@ def delete_city():
 
 @app.route('/faqPage')
 def faq_page():
-    return send_file('常用问题库.html')
+    return send_file('Common_question_bank.html')
 
 @app.route('/faq', methods=['GET', 'POST'])
 def faq_operations():
