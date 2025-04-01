@@ -1,15 +1,16 @@
+# server.py
 from flask import Flask, request, jsonify, send_file
 import os
 import shutil
 import faq_manager
+from db import get_connection
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 
-# 获取项目根目录
+# 项目根目录
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# 使用相对路径，城市目录放在项目根目录下的 "city" 文件夹中
+# 文件实际存储位置（仍使用本地文件夹存储文件内容）
 CITY_FOLDER = os.path.join(BASE_DIR, "city")
-os.makedirs(CITY_FOLDER, exist_ok=True)
 
 def get_base_folder(base_type):
     return "业务逻辑库" if base_type == "business" else "产品逻辑库"
@@ -19,7 +20,6 @@ def get_expected_root(city, base_type):
     base_folder = get_base_folder(base_type)
     return os.path.abspath(os.path.join(CITY_FOLDER, safe_city, base_folder))
 
-# 修改根路由，返回首页 index.html
 @app.route('/')
 def index():
     return send_file('index.html')
@@ -27,10 +27,13 @@ def index():
 @app.route('/getCities')
 def get_cities():
     try:
-        cities = []
-        for entry in os.listdir(CITY_FOLDER):
-            if os.path.isdir(os.path.join(CITY_FOLDER, entry)):
-                cities.append(entry)
+        conn = get_connection()
+        cursor = conn.cursor(dictionary=True)
+        sql = "SELECT DISTINCT city FROM file_metadata"
+        cursor.execute(sql)
+        cities = [row['city'] for row in cursor.fetchall()]
+        cursor.close()
+        conn.close()
         return jsonify(cities)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -43,33 +46,17 @@ def search_files():
         city = request.args.get('city')
         if not query or not base_type:
             return jsonify({"error": "缺少必要参数"}), 400
-
-        results = []
+        conn = get_connection()
+        cursor = conn.cursor(dictionary=True)
         if city:
-            expected_root = get_expected_root(city, base_type)
-            for root, dirs, files in os.walk(expected_root):
-                for file in files:
-                    if query.lower() in file.lower():
-                        results.append({
-                            "name": file,
-                            "path": os.path.relpath(os.path.join(root, file), expected_root).replace("\\", "/"),
-                            "city": city
-                        })
+            sql = "SELECT * FROM file_metadata WHERE city = %s AND base_type = %s AND file_name LIKE %s"
+            cursor.execute(sql, (city, base_type, '%' + query + '%'))
         else:
-            for entry in os.listdir(CITY_FOLDER):
-                city_dir = os.path.join(CITY_FOLDER, entry)
-                if os.path.isdir(city_dir):
-                    expected_root = get_expected_root(entry, base_type)
-                    if not os.path.exists(expected_root):
-                        continue
-                    for root, dirs, files in os.walk(expected_root):
-                        for file in files:
-                            if query.lower() in file.lower():
-                                results.append({
-                                    "name": file,
-                                    "path": os.path.relpath(os.path.join(root, file), expected_root).replace("\\", "/"),
-                                    "city": entry
-                                })
+            sql = "SELECT * FROM file_metadata WHERE base_type = %s AND file_name LIKE %s"
+            cursor.execute(sql, (base_type, '%' + query + '%'))
+        results = cursor.fetchall()
+        cursor.close()
+        conn.close()
         return jsonify({"results": results})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -82,37 +69,18 @@ def get_sub_directories():
         current_path = request.args.get('path', '')
         if not all([city, base_type]):
             return jsonify({"error": "必要参数缺失"}), 400
-
-        expected_root = get_expected_root(city, base_type)
-        target_dir = os.path.abspath(os.path.join(expected_root, current_path.lstrip('/')))
-        if not target_dir.startswith(expected_root):
-            return jsonify({"error": "非法路径访问"}), 403
-
-        if not os.path.exists(target_dir):
-            return jsonify({"structure": []})
-
-        def scan_directory(path, relative_path=""):
-            structure = []
-            try:
-                for entry in os.listdir(path):
-                    entry_path = os.path.join(path, entry)
-                    item = {
-                        "name": entry,
-                        "path": os.path.join(relative_path, entry).replace("\\", "/")
-                    }
-                    if os.path.isdir(entry_path):
-                        item["type"] = "directory"
-                        item["children"] = scan_directory(entry_path, os.path.join(relative_path, entry))
-                    else:
-                        item["type"] = "file"
-                    structure.append(item)
-            except Exception as e:
-                print(f"目录扫描错误: {str(e)}")
-            return structure
-
+        conn = get_connection()
+        cursor = conn.cursor(dictionary=True)
+        # 假设 file_path 存储的是从 expected_root 开始的相对路径
+        like_pattern = current_path.rstrip('/') + '/%'
+        sql = "SELECT * FROM file_metadata WHERE city = %s AND base_type = %s AND file_path LIKE %s"
+        cursor.execute(sql, (city, base_type, like_pattern))
+        structure = cursor.fetchall()
+        cursor.close()
+        conn.close()
         return jsonify({
             "current_path": current_path,
-            "structure": scan_directory(target_dir, current_path)
+            "structure": structure
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -125,7 +93,6 @@ def preview_file():
         file_path = request.args.get('file')
         if not all([city, file_path]):
             return jsonify({"error": "缺少必要参数"}), 400
-
         expected_root = get_expected_root(city, base_type)
         abs_path = os.path.abspath(os.path.join(expected_root, file_path.strip().replace('..', '')))
         if not abs_path.startswith(expected_root) or not os.path.exists(abs_path):
@@ -145,7 +112,6 @@ def move_file():
         new_path = data.get('newPath')
         if not all([source_city, target_city, old_path, new_path]):
             return jsonify({"error": "缺少必要参数"}), 400
-
         source_expected_root = get_expected_root(source_city, base_type)
         target_expected_root = get_expected_root(target_city, base_type)
         abs_old_path = os.path.abspath(os.path.join(source_expected_root, old_path.strip().replace('..', '')))
@@ -156,6 +122,15 @@ def move_file():
             return jsonify({"error": "非法新路径"}), 403
         os.makedirs(os.path.dirname(abs_new_path), exist_ok=True)
         shutil.move(abs_old_path, abs_new_path)
+        # 同步更新数据库中的文件元数据
+        conn = get_connection()
+        cursor = conn.cursor()
+        new_file_name = os.path.basename(new_path)
+        sql = "UPDATE file_metadata SET city = %s, file_path = %s, file_name = %s WHERE city = %s AND file_path = %s"
+        cursor.execute(sql, (target_city, new_path, new_file_name, source_city, old_path))
+        conn.commit()
+        cursor.close()
+        conn.close()
         return jsonify({"message": "文件移动成功"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -168,20 +143,24 @@ def delete_file():
         file_path = request.args.get('file')
         if not city or not file_path:
             return jsonify({"error": "缺少必要参数"}), 400
-
         expected_root = get_expected_root(city, base_type)
         abs_path = os.path.abspath(os.path.join(expected_root, file_path.strip().replace('..', '')))
         if not abs_path.startswith(expected_root):
             return jsonify({"error": "非法路径"}), 403
         if not os.path.exists(abs_path):
             return jsonify({"error": "文件不存在"}), 404
-
         os.remove(abs_path)
+        # 删除数据库中的记录
+        conn = get_connection()
+        cursor = conn.cursor()
+        sql = "DELETE FROM file_metadata WHERE city = %s AND file_path = %s"
+        cursor.execute(sql, (city, file_path))
+        conn.commit()
+        cursor.close()
+        conn.close()
         return jsonify({"message": "文件删除成功"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-# ---------------- 新增城市管理接口 ----------------
 
 @app.route('/api/city/create', methods=['POST'])
 def create_city():
@@ -199,7 +178,8 @@ def create_city():
         os.makedirs(business_path, exist_ok=True)
         for subdir in subdirs:
             os.makedirs(os.path.join(business_path, subdir), exist_ok=True)
-        return jsonify({"message": f"城市【{city}】目录创建成功。"})
+        # 如有需要，可将城市信息写入数据库（本示例中文件元数据表主要记录文件信息）
+        return jsonify({"message": f"城市〖{city}〗目录创建成功。"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -215,13 +195,17 @@ def delete_city():
     try:
         if os.path.exists(city_path):
             shutil.rmtree(city_path)
-            return jsonify({"message": f"城市【{city}】删除成功。"})
-        else:
-            return jsonify({"error": "指定的城市不存在。"}), 404
+        # 删除数据库中该城市的文件记录
+        conn = get_connection()
+        cursor = conn.cursor()
+        sql = "DELETE FROM file_metadata WHERE city = %s"
+        cursor.execute(sql, (city,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return jsonify({"message": f"城市〖{city}〗删除成功。"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-# ---------------- FAQ相关接口 ----------------
 
 @app.route('/faqPage')
 def faq_page():
@@ -232,22 +216,19 @@ def faq_operations():
     if request.method == 'GET':
         search = request.args.get('search', '').lower()
         tag_filter = request.args.get('tag', '')
-        
         questions = faq_manager.list_questions()
         results = []
         for q in questions:
             match_search = search in q['title'].lower() or search in q['content'].lower()
-            match_tag = not tag_filter or tag_filter in q.get('tags', [])
+            match_tag = not tag_filter or tag_filter in (q.get('tags') or '')
             if match_search and match_tag:
                 results.append(q)
         return jsonify(results)
-    
     elif request.method == 'POST':
         data = request.json
         title = data.get('title')
         content = data.get('content')
         tags = data.get('tags', [])
-        
         if not title or not content:
             return jsonify({"error": "标题和内容不能为空"}), 400
         new_q = faq_manager.create_question(title, content, tags)
@@ -258,7 +239,6 @@ def single_faq(qid):
     if request.method == 'GET':
         q = faq_manager.get_question(qid)
         return jsonify(q) if q else ('', 404)
-    
     elif request.method == 'PUT':
         data = request.json
         updated_q = faq_manager.update_question(qid, 
@@ -266,7 +246,6 @@ def single_faq(qid):
             data.get('content'),
             data.get('tags', []))
         return jsonify(updated_q) if updated_q else ('', 404)
-    
     elif request.method == 'DELETE':
         success = faq_manager.delete_question(qid)
         return jsonify({"message": "删除成功"}) if success else ('', 404)
