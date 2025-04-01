@@ -112,14 +112,14 @@ async function loadQuestions() {
         if (!res.ok) throw new Error('加载失败');
         
         const data = await res.json();
-        const tbody = document.getElementById('faqTableBody');
-        tbody.innerHTML = data.map(q => `
+        const faqList = document.querySelector('.faq-list');
+        faqList.innerHTML = data.map(q => `
             <li class="faq-item">
                 <div class="faq-info">
                     <div class="faq-title">${q.title}</div>
                     <div class="faq-meta">
                         <span>${new Date(q.created_at).toLocaleString()}</span>
-                        <span>${q.tags.join(', ')}</span>
+                        <span>${q.tags ? q.tags.join(', ') : ''}</span>
                     </div>
                 </div>
                 <div class="faq-actions">

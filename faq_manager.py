@@ -27,6 +27,8 @@ def get_question(qid):
     sql = "SELECT * FROM faq WHERE id = %s"
     cursor.execute(sql, (qid,))
     result = cursor.fetchone()
+    if result and result['tags']:
+        result['tags'] = result['tags'].split(',')  # 确保 tags 是列表格式
     cursor.close()
     conn.close()
     return result
@@ -63,6 +65,22 @@ def list_questions():
     sql = "SELECT * FROM faq"
     cursor.execute(sql)
     results = cursor.fetchall()
+    for result in results:
+        result['tags'] = result['tags'].split(',') if result['tags'] else []
     cursor.close()
     conn.close()
     return results
+
+def list_files(city, base_type):
+    try:
+        conn = get_connection()
+        cursor = conn.cursor(dictionary=True)
+        sql = "SELECT * FROM file_metadata WHERE city = %s AND base_type = %s"
+        cursor.execute(sql, (city, base_type))
+        files = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return files
+    except Exception as e:
+        print("获取文件列表失败:", e)
+        return []
