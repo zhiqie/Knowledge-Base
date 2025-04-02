@@ -1,59 +1,141 @@
 # server.py
-from flask import Flask, request, jsonify, send_file
-import os
-import shutil
-import faq_manager
+from flask import Flask, request, jsonify, send_file, Response
+import io
+from datetime import datetime
+import mysql.connector
 from db import get_connection
+import faq_manager  # FAQ 部分保持不变
 
 app = Flask(__name__, static_folder='.', static_url_path='')
-
-# 项目根目录
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# 文件实际存储位置（仍使用本地文件夹存储文件内容）
-CITY_FOLDER = os.path.join(BASE_DIR, "city")
-
-def get_base_folder(base_type):
-    return "业务逻辑库" if base_type == "business" else "产品逻辑库"
-
-def get_expected_root(city, base_type):
-    safe_city = city.strip().replace('..', '')
-    base_folder = get_base_folder(base_type)
-    return os.path.abspath(os.path.join(CITY_FOLDER, safe_city, base_folder))
 
 @app.route('/')
 def index():
     return send_file('index.html')
 
+# ---------------- 城市管理（业务逻辑库）接口 ----------------
+
+@app.route('/api/city/create', methods=['POST'])
+def create_city():
+    """
+    创建一个新的业务逻辑库城市记录（不再创建本地文件夹）。
+    前端提交 JSON 格式的数据，包含：city（必填）、type（可选，默认 business）
+    """
+    data = request.get_json() or {}
+    city = data.get('city')
+    base_type = data.get('type', 'business')
+    if not city:
+        return jsonify({"error": "城市名称不能为空"}), 400
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        sql = "INSERT INTO cities (name, base_type, created_at) VALUES (%s, %s, %s)"
+        created_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        cursor.execute(sql, (city.strip(), base_type, created_at))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return jsonify({"message": f"城市【{city}】创建成功。"})
+    except mysql.connector.Error as err:
+        return jsonify({"error": str(err)}), 500
+
+@app.route('/api/city/delete', methods=['DELETE'])
+def delete_city():
+    """
+    删除指定城市，同时删除该城市下所有的文件记录。
+    前端提交 JSON 数据，包含 city 字段。
+    """
+    data = request.get_json() or {}
+    city = data.get('city')
+    if not city:
+        return jsonify({"error": "城市名称不能为空"}), 400
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        sql = "DELETE FROM cities WHERE name = %s"
+        cursor.execute(sql, (city.strip(),))
+        # 同时删除该城市的文件记录
+        sql_files = "DELETE FROM files WHERE city = %s"
+        cursor.execute(sql_files, (city.strip(),))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return jsonify({"message": f"城市【{city}】及其文件已删除。"})
+    except mysql.connector.Error as err:
+        return jsonify({"error": str(err)}), 500
+
+# ---------------- 新增：获取城市列表接口 ----------------
 @app.route('/getCities')
 def get_cities():
+    """
+    获取已创建的城市列表，从 cities 表中读取城市名称
+    """
     try:
         conn = get_connection()
         cursor = conn.cursor(dictionary=True)
-        sql = "SELECT DISTINCT city FROM file_metadata"
+        sql = "SELECT name FROM cities"
         cursor.execute(sql)
-        cities = [row['city'] for row in cursor.fetchall()]
+        cities = [row['name'] for row in cursor.fetchall()]
         cursor.close()
         conn.close()
         return jsonify(cities)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+# ---------------- 文件上传与管理（业务逻辑库）接口 ----------------
+
+@app.route('/uploadFile', methods=['POST'])
+def upload_file():
+    """
+    上传文件接口：前端以 multipart/form-data 格式提交数据，
+    包括 city（业务逻辑库所属城市）、type（默认 business）和上传文件（字段名 file）。
+    文件内容直接存储在数据库的 files 表中。
+    """
+    try:
+        city = request.form.get('city')
+        base_type = request.form.get('type', 'business')
+        if not city or 'file' not in request.files:
+            return jsonify({"error": "缺少必要参数"}), 400
+        file = request.files['file']
+        file_name = file.filename
+        mime_type = file.mimetype
+        file_data = file.read()
+        conn = get_connection()
+        cursor = conn.cursor()
+        sql = """
+        INSERT INTO files (city, base_type, file_name, mime_type, file_data, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        """
+        created_at = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        cursor.execute(sql, (city.strip(), base_type, file_name, mime_type, file_data, created_at))
+        conn.commit()
+        file_id = cursor.lastrowid
+        cursor.close()
+        conn.close()
+        return jsonify({"message": "文件上传成功", "file_id": file_id})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/searchFiles', methods=['GET'])
 def search_files():
+    """
+    文件查询接口：支持根据城市、类型和文件名关键词查询上传的文件记录。
+    前端提交 query（关键词）、type（默认 business）和 city（可选）。
+    """
     try:
-        query = request.args.get('query')
-        base_type = request.args.get('type')
-        city = request.args.get('city')
-        if not query or not base_type:
-            return jsonify({"error": "缺少必要参数"}), 400
+        query = request.args.get('query', '')
+        base_type = request.args.get('type', 'business')
+        city = request.args.get('city', '')
         conn = get_connection()
         cursor = conn.cursor(dictionary=True)
+        sql = "SELECT * FROM files WHERE base_type = %s"
+        params = [base_type]
         if city:
-            sql = "SELECT * FROM file_metadata WHERE city = %s AND base_type = %s AND file_name LIKE %s"
-            cursor.execute(sql, (city, base_type, '%' + query + '%'))
-        else:
-            sql = "SELECT * FROM file_metadata WHERE base_type = %s AND file_name LIKE %s"
-            cursor.execute(sql, (base_type, '%' + query + '%'))
+            sql += " AND city = %s"
+            params.append(city)
+        if query:
+            sql += " AND file_name LIKE %s"
+            params.append('%' + query + '%')
+        cursor.execute(sql, tuple(params))
         results = cursor.fetchall()
         cursor.close()
         conn.close()
@@ -61,73 +143,47 @@ def search_files():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/getSubDirectories', methods=['GET'])
-def get_sub_directories():
-    try:
-        city = request.args.get('city')
-        base_type = request.args.get('type')
-        current_path = request.args.get('path', '')
-        if not all([city, base_type]):
-            return jsonify({"error": "必要参数缺失"}), 400
-        conn = get_connection()
-        cursor = conn.cursor(dictionary=True)
-        # 假设 file_path 存储的是从 expected_root 开始的相对路径
-        like_pattern = current_path.rstrip('/') + '/%'
-        sql = "SELECT * FROM file_metadata WHERE city = %s AND base_type = %s AND file_path LIKE %s"
-        cursor.execute(sql, (city, base_type, like_pattern))
-        structure = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        return jsonify({
-            "current_path": current_path,
-            "structure": structure
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 @app.route('/preview', methods=['GET'])
 def preview_file():
+    """
+    文件预览接口：根据前端传入的 file_id 参数，从数据库中读取文件数据，
+    返回文件内容供浏览器直接预览。
+    """
     try:
-        city = request.args.get('city')
-        base_type = request.args.get('type', 'business')
-        file_path = request.args.get('file')
-        if not all([city, file_path]):
-            return jsonify({"error": "缺少必要参数"}), 400
-        expected_root = get_expected_root(city, base_type)
-        abs_path = os.path.abspath(os.path.join(expected_root, file_path.strip().replace('..', '')))
-        if not abs_path.startswith(expected_root) or not os.path.exists(abs_path):
-            return jsonify({"error": "非法路径或文件不存在"}), 403
-        return send_file(abs_path)
+        file_id = request.args.get('file_id')
+        if not file_id:
+            return jsonify({"error": "缺少文件ID参数"}), 400
+        conn = get_connection()
+        cursor = conn.cursor(dictionary=True)
+        sql = "SELECT file_name, mime_type, file_data FROM files WHERE id = %s"
+        cursor.execute(sql, (file_id,))
+        file_record = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        if not file_record:
+            return jsonify({"error": "文件不存在"}), 404
+        return Response(file_record['file_data'],
+                        mimetype=file_record['mime_type'],
+                        headers={"Content-Disposition": f"inline; filename={file_record['file_name']}"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route('/moveFile', methods=['POST'])
 def move_file():
+    """
+    文件移动接口：此处主要实现将文件的所属城市更改，
+    前端提交 JSON 数据，包含 file_id 和 targetCity 参数。
+    """
     try:
         data = request.get_json()
-        source_city = data.get('sourceCity')
+        file_id = data.get('file_id')
         target_city = data.get('targetCity')
-        base_type = data.get('type', 'business')
-        old_path = data.get('oldPath')
-        new_path = data.get('newPath')
-        if not all([source_city, target_city, old_path, new_path]):
+        if not file_id or not target_city:
             return jsonify({"error": "缺少必要参数"}), 400
-        source_expected_root = get_expected_root(source_city, base_type)
-        target_expected_root = get_expected_root(target_city, base_type)
-        abs_old_path = os.path.abspath(os.path.join(source_expected_root, old_path.strip().replace('..', '')))
-        abs_new_path = os.path.abspath(os.path.join(target_expected_root, new_path.strip().replace('..', '')))
-        if not abs_old_path.startswith(source_expected_root) or not os.path.exists(abs_old_path):
-            return jsonify({"error": "非法旧路径或文件不存在"}), 403
-        if not abs_new_path.startswith(target_expected_root):
-            return jsonify({"error": "非法新路径"}), 403
-        os.makedirs(os.path.dirname(abs_new_path), exist_ok=True)
-        shutil.move(abs_old_path, abs_new_path)
-        # 同步更新数据库中的文件元数据
         conn = get_connection()
         cursor = conn.cursor()
-        new_file_name = os.path.basename(new_path)
-        sql = "UPDATE file_metadata SET city = %s, file_path = %s, file_name = %s WHERE city = %s AND file_path = %s"
-        cursor.execute(sql, (target_city, new_path, new_file_name, source_city, old_path))
+        sql = "UPDATE files SET city = %s WHERE id = %s"
+        cursor.execute(sql, (target_city.strip(), file_id))
         conn.commit()
         cursor.close()
         conn.close()
@@ -137,24 +193,17 @@ def move_file():
 
 @app.route('/deleteFile', methods=['DELETE'])
 def delete_file():
+    """
+    文件删除接口：根据 file_id 参数删除数据库中的文件记录。
+    """
     try:
-        city = request.args.get('city')
-        base_type = request.args.get('type', 'business')
-        file_path = request.args.get('file')
-        if not city or not file_path:
-            return jsonify({"error": "缺少必要参数"}), 400
-        expected_root = get_expected_root(city, base_type)
-        abs_path = os.path.abspath(os.path.join(expected_root, file_path.strip().replace('..', '')))
-        if not abs_path.startswith(expected_root):
-            return jsonify({"error": "非法路径"}), 403
-        if not os.path.exists(abs_path):
-            return jsonify({"error": "文件不存在"}), 404
-        os.remove(abs_path)
-        # 删除数据库中的记录
+        file_id = request.args.get('file_id')
+        if not file_id:
+            return jsonify({"error": "缺少文件ID参数"}), 400
         conn = get_connection()
         cursor = conn.cursor()
-        sql = "DELETE FROM file_metadata WHERE city = %s AND file_path = %s"
-        cursor.execute(sql, (city, file_path))
+        sql = "DELETE FROM files WHERE id = %s"
+        cursor.execute(sql, (file_id,))
         conn.commit()
         cursor.close()
         conn.close()
@@ -162,51 +211,7 @@ def delete_file():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@app.route('/api/city/create', methods=['POST'])
-def create_city():
-    data = request.get_json() or {}
-    city = data.get('city')
-    base_type = data.get('type', 'business')
-    if not city:
-        return jsonify({"error": "城市名称不能为空"}), 400
-    safe_city = city.strip().replace('..', '')
-    base_folder = get_base_folder(base_type)
-    city_path = os.path.join(CITY_FOLDER, safe_city)
-    business_path = os.path.join(city_path, base_folder)
-    subdirs = ["合同库", "文档库", "视频库"]
-    try:
-        os.makedirs(business_path, exist_ok=True)
-        for subdir in subdirs:
-            os.makedirs(os.path.join(business_path, subdir), exist_ok=True)
-        # 如有需要，可将城市信息写入数据库（本示例中文件元数据表主要记录文件信息）
-        return jsonify({"message": f"城市〖{city}〗目录创建成功。"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route('/api/city/delete', methods=['DELETE'])
-def delete_city():
-    data = request.get_json() or {}
-    city = data.get('city')
-    base_type = data.get('type', 'business')
-    if not city:
-        return jsonify({"error": "城市名称不能为空"}), 400
-    safe_city = city.strip().replace('..', '')
-    city_path = os.path.join(CITY_FOLDER, safe_city)
-    try:
-        if os.path.exists(city_path):
-            shutil.rmtree(city_path)
-        # 删除数据库中该城市的文件记录
-        conn = get_connection()
-        cursor = conn.cursor()
-        sql = "DELETE FROM file_metadata WHERE city = %s"
-        cursor.execute(sql, (city,))
-        conn.commit()
-        cursor.close()
-        conn.close()
-        return jsonify({"message": f"城市〖{city}〗删除成功。"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
+# ---------------- FAQ接口（保持不变） ----------------
 @app.route('/faqPage')
 def faq_page():
     return send_file('Common_question_bank.html')
